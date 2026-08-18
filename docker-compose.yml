@@ -7,16 +7,19 @@ services:
     container_name: visual-mcp
     restart: unless-stopped
     init: true
-    # Bind to 127.0.0.1 when a reverse proxy (Nginx/Caddy/Traefik) fronts it on
-    # the VPS; use "4000:4000" to expose the port publicly.
+    # No se publica al exterior: Caddy lo alcanza por la red interna de Compose.
+    # El puerto en loopback es solo para depurar desde el propio VPS
+    # (curl http://127.0.0.1:4000/health).
     ports:
-      - "4000:4000"
+      - "127.0.0.1:4000:4000"
     environment:
       NODE_ENV: production
       PORT: "4000"
       HOST: 0.0.0.0
-      # PUBLIC_URL: https://visual-mcp.example.com
-      # ALLOWED_HOSTS: visual-mcp.example.com
+      # svgUrl en los resultados apunta aquí; ALLOWED_HOSTS activa la
+      # protección DNS-rebinding.
+      PUBLIC_URL: https://${MCP_DOMAIN:?define MCP_DOMAIN en .env}
+      ALLOWED_HOSTS: ${MCP_DOMAIN}
       # VISUAL_MCP_INLINE_SVG: "1"
     env_file:
       - path: .env
@@ -38,3 +41,32 @@ services:
         max-file: "3"
     security_opt:
       - no-new-privileges:true
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: visual-mcp-caddy
+    restart: unless-stopped
+    depends_on:
+      - visual-mcp
+    ports:
+      - "80:80"      # necesario para el challenge ACME y el redirect a HTTPS
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    environment:
+      MCP_DOMAIN: ${MCP_DOMAIN:?define MCP_DOMAIN en .env}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # <- aquí viven los certificados: NO borrar
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  caddy_data:
+  caddy_config:

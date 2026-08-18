@@ -1,0 +1,22 @@
+# TLS automático (Let's Encrypt) para el dominio de MCP_DOMAIN.
+# Caddy pide y renueva el certificado solo; los certificados viven en el
+# volumen caddy_data, así que sobreviven a reinicios y recreaciones.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$MCP_DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy visual-mcp:4000 {
+		# El transporte Streamable HTTP del MCP puede mantener un stream SSE
+		# abierto: nunca lo bufferices.
+		flush_interval -1
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

@@ -328,38 +328,62 @@ npm run dev:http                  # http://localhost:3333/mcp
 npx localtunnel --port 3333       # or: ngrok http 3333, or cloudflared tunnel
 ```
 
-### B. Deploy with Docker (VPS)
+### B. Deploy with Docker on a VPS
 
-The image listens on **port 4000**. `docker-compose.yml` is the shortest path:
+`docker-compose.yml` runs two containers: the MCP server on port 4000 (not published to the
+internet) and **Caddy**, which terminates TLS in front of it and renews the certificate
+automatically.
+
+**1. Pick a public hostname.** ChatGPT requires HTTPS, and a bare IP cannot have a
+certificate. Without a domain of your own, use [sslip.io](https://sslip.io) — it resolves
+`<ip>.sslip.io` to that IP with no registration, and Let's Encrypt issues certificates for it:
 
 ```bash
-cp .env.example .env          # set PUBLIC_URL and ALLOWED_HOSTS
-docker compose up -d --build
-curl http://localhost:4000/health
+curl -4 ifconfig.me            # on the VPS -> e.g. 203.0.113.45
+# hostname becomes: 203.0.113.45.sslip.io
 ```
 
-Or without Compose:
+**2. Configure and start:**
+
+```bash
+cp .env.example .env
+# set MCP_DOMAIN=203.0.113.45.sslip.io (and optionally ACME_EMAIL)
+docker compose up -d --build
+```
+
+**3. Open ports 80 and 443.** Port 80 is required for the ACME challenge, not just for the
+redirect — without it the certificate is never issued:
+
+```bash
+sudo ufw allow 80,443/tcp      # plus the provider's own firewall / security group
+```
+
+**4. Verify** (the first request may take a few seconds while the certificate is issued):
+
+```bash
+curl https://$MCP_DOMAIN/health          # {"status":"ok",...}
+docker compose logs caddy | grep -i certificate
+```
+
+The MCP URL is then `https://<MCP_DOMAIN>/mcp`, and it is permanent: `restart: unless-stopped`
+survives reboots, and the certificates live in the `caddy_data` volume, so renewals persist
+across `docker compose down`/`up`. Only `docker compose down -v` would wipe them.
+
+`PUBLIC_URL` and `ALLOWED_HOSTS` are derived from `MCP_DOMAIN` by Compose — the first makes
+tool results carry `svgUrl`, the second turns on DNS-rebinding protection.
+
+### Without Compose
 
 ```bash
 docker build -t visual-mcp .
-docker run -d --name visual-mcp --restart unless-stopped -p 4000:4000 \
-  -e PUBLIC_URL=https://your-domain -e ALLOWED_HOSTS=your-domain visual-mcp
+docker run -d --name visual-mcp --restart unless-stopped -p 127.0.0.1:4000:4000 \
+  -e PUBLIC_URL=https://your-host -e ALLOWED_HOSTS=your-host visual-mcp
 ```
 
-Behind a reverse proxy, bind the port to loopback (`-p 127.0.0.1:4000:4000`) and let
-Nginx/Caddy/Traefik terminate TLS and forward to `http://127.0.0.1:4000`. A minimal Caddy
-site is enough, since the server is stateless:
-
-```
-visual-mcp.example.com {
-    reverse_proxy 127.0.0.1:4000
-}
-```
-
-The container runs as the non-root `node` user, ships a `/health` HEALTHCHECK and only
-carries production dependencies (multi-stage build). Any platform that runs a Node HTTP
-service works too (Fly.io, Railway, Render, Cloud Run) — they inject their own `PORT`, which
-the server honours. See `.env.example` for the settings; local development needs none of them.
+Then point any reverse proxy at `http://127.0.0.1:4000`. The container runs as the non-root
+`node` user, ships a `/health` HEALTHCHECK and carries only production dependencies.
+Managed platforms (Fly.io, Railway, Render, Cloud Run) work too — they inject their own
+`PORT`, which the server honours.
 
 ### Then, in ChatGPT
 
