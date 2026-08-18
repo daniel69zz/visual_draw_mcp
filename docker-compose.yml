@@ -1,0 +1,40 @@
+services:
+  visual-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: visual-mcp:latest
+    container_name: visual-mcp
+    restart: unless-stopped
+    init: true
+    # Bind to 127.0.0.1 when a reverse proxy (Nginx/Caddy/Traefik) fronts it on
+    # the VPS; use "4000:4000" to expose the port publicly.
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      HOST: 0.0.0.0
+      # PUBLIC_URL: https://visual-mcp.example.com
+      # ALLOWED_HOSTS: visual-mcp.example.com
+      # VISUAL_MCP_INLINE_SVG: "1"
+    env_file:
+      - path: .env
+        required: false
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true

@@ -1,0 +1,71 @@
+# --- Dependencies ---
+node_modules/
+.pnp
+.pnp.js
+.npm
+.yarn/cache
+.yarn/unplugged
+.yarn/install-state.gz
+.pnpm-store/
+
+# --- Build output ---
+dist/
+dist-ui/
+build/
+out/
+*.tsbuildinfo
+.vite/
+
+# --- Generated artifacts ---
+examples/out/
+
+# --- Environment / secrets ---
+.env
+.env.*
+!.env.example
+
+*.pem
+*.key
+*.p12
+secrets/
+
+# --- Tests & coverage ---
+coverage/
+.nyc_output/
+*.lcov
+
+# --- Logs ---
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# --- Caches ---
+.cache/
+.temp/
+.tmp/
+.eslintcache
+.turbo/
+
+# --- Editors / IDE ---
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# --- Docker (local overrides only; Dockerfile & compose are tracked) ---
+docker-compose.override.yml
