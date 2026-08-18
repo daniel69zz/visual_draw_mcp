@@ -49,15 +49,20 @@ services:
     restart: unless-stopped
     depends_on:
       - visual-mcp
-    # El 443 lo ocupa otro servicio del VPS, así que HTTPS va en el 500.
-    # El 80 NO es opcional: es el único desafío ACME que queda disponible
-    # (TLS-ALPN exige el 443). Sin el 80 no hay certificado ni renovación.
+    # 443 y 80 los ocupan otros servicios del VPS: HTTPS va en 500 y el
+    # desafío ACME se escucha en 90.
+    #
+    # El 90 se publica en loopback porque quien recibe el desafío desde
+    # internet es el servidor del puerto 80, que lo reenvía a 127.0.0.1:90.
+    # Si ese servidor corre dentro de Docker y no en el host, pon
+    # MCP_HTTP_BIND=0.0.0.0 en .env para que pueda alcanzarlo.
     ports:
-      - "80:80"
+      - "${MCP_HTTP_BIND:-127.0.0.1}:${MCP_HTTP_PORT:-90}:${MCP_HTTP_PORT:-90}"
       - "${MCP_HTTPS_PORT:-500}:${MCP_HTTPS_PORT:-500}"
       - "${MCP_HTTPS_PORT:-500}:${MCP_HTTPS_PORT:-500}/udp"  # HTTP/3
     environment:
       MCP_DOMAIN: ${MCP_DOMAIN:?define MCP_DOMAIN en .env}
+      HTTP_PORT: ${MCP_HTTP_PORT:-90}
       HTTPS_PORT: ${MCP_HTTPS_PORT:-500}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro

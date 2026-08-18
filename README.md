@@ -334,11 +334,18 @@ npx localtunnel --port 3333       # or: ngrok http 3333, or cloudflared tunnel
 internet) and **Caddy**, which terminates TLS in front of it and renews the certificate
 automatically.
 
-HTTPS is served on **port 500**, not 443, because port 443 on this VPS belongs to another
-service. That has one consequence worth understanding: the TLS-ALPN challenge only works on
-443, so certificates are validated over **HTTP-01 on port 80**. Port 80 must be reachable
-from the internet or no certificate is ever issued — and renewals (every ~60 days) need it
-just as much as the first issuance.
+This VPS already has other services on ports 80 and 443, so:
+
+| | Port | Why |
+|---|---|---|
+| HTTPS / MCP endpoint | **500** | 443 is taken |
+| ACME HTTP-01 challenge | **90** | 80 is taken |
+| MCP server | 4000 | internal only, never published |
+
+**The catch:** Let's Encrypt always connects to **port 80** for HTTP-01 — that is fixed by
+RFC 8555 and cannot be configured — and TLS-ALPN is likewise fixed to 443. Caddy can *listen*
+on 90, but something has to get the request there. So whatever already owns port 80 must
+forward the challenge path to Caddy.
 
 **1. Pick a public hostname.** ChatGPT requires HTTPS, and a bare IP cannot have a
 certificate. Without a domain of your own, use [sslip.io](https://sslip.io) — it resolves
@@ -349,21 +356,51 @@ curl -4 ifconfig.me            # on the VPS -> e.g. 203.0.113.45
 # hostname becomes: 203.0.113.45.sslip.io
 ```
 
-**2. Configure and start:**
+**2. Forward the ACME challenge from the port-80 server.** Identify it first:
+
+```bash
+sudo ss -lptn 'sport = :80'
+```
+
+nginx — inside the `server { listen 80; }` block:
+
+```nginx
+location /.well-known/acme-challenge/ {
+    proxy_pass http://127.0.0.1:90;
+    proxy_set_header Host $host;
+}
+```
+
+Apache — inside the `<VirtualHost *:80>`:
+
+```apache
+ProxyPreserveHost On
+ProxyPass        /.well-known/acme-challenge/ http://127.0.0.1:90/.well-known/acme-challenge/
+ProxyPassReverse /.well-known/acme-challenge/ http://127.0.0.1:90/.well-known/acme-challenge/
+```
+
+Caddy — inside the site block serving port 80:
+
+```
+handle /.well-known/acme-challenge/* {
+    reverse_proxy 127.0.0.1:90
+}
+```
+
+Use a real proxy, not a `301` redirect: Let's Encrypt follows redirects only to ports 80 and
+443, so a redirect to `:90` would fail.
+
+**3. Configure and start:**
 
 ```bash
 cp .env.example .env
-# MCP_DOMAIN=203.0.113.45.sslip.io   (MCP_HTTPS_PORT defaults to 500)
+# MCP_DOMAIN=203.0.113.45.sslip.io
 docker compose up -d --build
 ```
 
-**3. Open the ports.** Inbound TCP **80** and **500** — both in the VPS firewall and in the
-provider's security group:
-
-```bash
-sudo ufw allow 80/tcp
-sudo ufw allow 500/tcp
-```
+If the port-80 server runs inside its own container rather than on the host, `127.0.0.1:90`
+is not reachable from it — set `MCP_HTTP_BIND=0.0.0.0` in `.env` and point the proxy at the
+VPS's internal IP (or put both containers on one Docker network).
 
 **4. Verify** (the first request may take a few seconds while the certificate is issued):
 
@@ -375,15 +412,17 @@ docker compose logs caddy | grep -i "certificate obtained"
 The MCP URL is then `https://<MCP_DOMAIN>:500/mcp`, and it is permanent: `restart:
 unless-stopped` survives reboots, and the certificates live in the `caddy_data` volume, so
 renewals persist across `docker compose down`/`up`. Only `docker compose down -v` wipes them.
+Keep the challenge forwarding in place — renewals every ~60 days need it exactly as much as
+the first issuance did.
 
 `PUBLIC_URL` and `ALLOWED_HOSTS` are derived from `MCP_DOMAIN` and `MCP_HTTPS_PORT` by
 Compose. Both must carry the port: `PUBLIC_URL` because `svgUrl` links would otherwise point
 at 443, and `ALLOWED_HOSTS` because the SDK compares the raw `Host` header — which reads
 `<domain>:500` on a non-standard port — as an exact string.
 
-**If port 80 is also taken**, this setup cannot work as-is: some other web server owns the
-machine's HTTP entry point. Find it with `sudo ss -lptn 'sport = :80 or sport = :443'` and
-add visual-mcp as a virtual host there instead, proxying to `http://127.0.0.1:4000`.
+**If you cannot touch the port-80 server**, HTTP-01 is not available at all. The options are
+a DNS-01 challenge (needs a real domain on a supported DNS provider — sslip.io has no API),
+or a Cloudflare Tunnel, which needs no inbound ports whatsoever.
 
 ### Without Compose
 
