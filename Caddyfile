@@ -1,12 +1,26 @@
-# TLS automático (Let's Encrypt) para el dominio de MCP_DOMAIN.
-# Caddy pide y renueva el certificado solo; los certificados viven en el
-# volumen caddy_data, así que sobreviven a reinicios y recreaciones.
-
+# TLS automático (Let's Encrypt) para el host de MCP_DOMAIN.
+#
+# HTTPS se sirve en HTTPS_PORT (500 por defecto) porque el 443 de este VPS ya
+# está ocupado por otro servicio. Eso obliga a validar por HTTP-01 sobre el
+# puerto 80: el desafío TLS-ALPN solo funciona en el 443, así que se desactiva.
+# => El puerto 80 debe estar abierto al mundo o NO habrá certificado.
 {
-	email {$ACME_EMAIL}
+	http_port 80
+	https_port {$HTTPS_PORT:500}
+
+	# El puerto 80 sirve EXCLUSIVAMENTE el desafío ACME. Sin esto, Caddy
+	# redirigiría http://dominio/ a https://dominio/ (puerto 443), que en este
+	# VPS pertenece a otro servicio.
+	auto_https disable_redirects
 }
 
-{$MCP_DOMAIN} {
+{$MCP_DOMAIN}:{$HTTPS_PORT:500} {
+	tls {
+		issuer acme {
+			disable_tlsalpn_challenge
+		}
+	}
+
 	encode zstd gzip
 
 	reverse_proxy visual-mcp:4000 {

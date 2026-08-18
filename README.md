@@ -334,6 +334,12 @@ npx localtunnel --port 3333       # or: ngrok http 3333, or cloudflared tunnel
 internet) and **Caddy**, which terminates TLS in front of it and renews the certificate
 automatically.
 
+HTTPS is served on **port 500**, not 443, because port 443 on this VPS belongs to another
+service. That has one consequence worth understanding: the TLS-ALPN challenge only works on
+443, so certificates are validated over **HTTP-01 on port 80**. Port 80 must be reachable
+from the internet or no certificate is ever issued — and renewals (every ~60 days) need it
+just as much as the first issuance.
+
 **1. Pick a public hostname.** ChatGPT requires HTTPS, and a bare IP cannot have a
 certificate. Without a domain of your own, use [sslip.io](https://sslip.io) — it resolves
 `<ip>.sslip.io` to that IP with no registration, and Let's Encrypt issues certificates for it:
@@ -347,30 +353,37 @@ curl -4 ifconfig.me            # on the VPS -> e.g. 203.0.113.45
 
 ```bash
 cp .env.example .env
-# set MCP_DOMAIN=203.0.113.45.sslip.io (and optionally ACME_EMAIL)
+# MCP_DOMAIN=203.0.113.45.sslip.io   (MCP_HTTPS_PORT defaults to 500)
 docker compose up -d --build
 ```
 
-**3. Open ports 80 and 443.** Port 80 is required for the ACME challenge, not just for the
-redirect — without it the certificate is never issued:
+**3. Open the ports.** Inbound TCP **80** and **500** — both in the VPS firewall and in the
+provider's security group:
 
 ```bash
-sudo ufw allow 80,443/tcp      # plus the provider's own firewall / security group
+sudo ufw allow 80/tcp
+sudo ufw allow 500/tcp
 ```
 
 **4. Verify** (the first request may take a few seconds while the certificate is issued):
 
 ```bash
-curl https://$MCP_DOMAIN/health          # {"status":"ok",...}
-docker compose logs caddy | grep -i certificate
+curl https://$MCP_DOMAIN:500/health       # {"status":"ok",...}
+docker compose logs caddy | grep -i "certificate obtained"
 ```
 
-The MCP URL is then `https://<MCP_DOMAIN>/mcp`, and it is permanent: `restart: unless-stopped`
-survives reboots, and the certificates live in the `caddy_data` volume, so renewals persist
-across `docker compose down`/`up`. Only `docker compose down -v` would wipe them.
+The MCP URL is then `https://<MCP_DOMAIN>:500/mcp`, and it is permanent: `restart:
+unless-stopped` survives reboots, and the certificates live in the `caddy_data` volume, so
+renewals persist across `docker compose down`/`up`. Only `docker compose down -v` wipes them.
 
-`PUBLIC_URL` and `ALLOWED_HOSTS` are derived from `MCP_DOMAIN` by Compose — the first makes
-tool results carry `svgUrl`, the second turns on DNS-rebinding protection.
+`PUBLIC_URL` and `ALLOWED_HOSTS` are derived from `MCP_DOMAIN` and `MCP_HTTPS_PORT` by
+Compose. Both must carry the port: `PUBLIC_URL` because `svgUrl` links would otherwise point
+at 443, and `ALLOWED_HOSTS` because the SDK compares the raw `Host` header — which reads
+`<domain>:500` on a non-standard port — as an exact string.
+
+**If port 80 is also taken**, this setup cannot work as-is: some other web server owns the
+machine's HTTP entry point. Find it with `sudo ss -lptn 'sport = :80 or sport = :443'` and
+add visual-mcp as a virtual host there instead, proxying to `http://127.0.0.1:4000`.
 
 ### Without Compose
 

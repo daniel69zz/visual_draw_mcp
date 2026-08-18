@@ -16,10 +16,11 @@ services:
       NODE_ENV: production
       PORT: "4000"
       HOST: 0.0.0.0
-      # svgUrl en los resultados apunta aquí; ALLOWED_HOSTS activa la
-      # protección DNS-rebinding.
-      PUBLIC_URL: https://${MCP_DOMAIN:?define MCP_DOMAIN en .env}
-      ALLOWED_HOSTS: ${MCP_DOMAIN}
+      # El puerto forma parte de la URL pública, así que svgUrl debe llevarlo.
+      PUBLIC_URL: https://${MCP_DOMAIN:?define MCP_DOMAIN en .env}:${MCP_HTTPS_PORT:-500}
+      # El header Host llega como "dominio:500" al no ser un puerto estándar;
+      # el SDK compara la cadena exacta, así que se admiten ambas formas.
+      ALLOWED_HOSTS: ${MCP_DOMAIN}:${MCP_HTTPS_PORT:-500},${MCP_DOMAIN}
       # VISUAL_MCP_INLINE_SVG: "1"
     env_file:
       - path: .env
@@ -48,13 +49,16 @@ services:
     restart: unless-stopped
     depends_on:
       - visual-mcp
+    # El 443 lo ocupa otro servicio del VPS, así que HTTPS va en el 500.
+    # El 80 NO es opcional: es el único desafío ACME que queda disponible
+    # (TLS-ALPN exige el 443). Sin el 80 no hay certificado ni renovación.
     ports:
-      - "80:80"      # necesario para el challenge ACME y el redirect a HTTPS
-      - "443:443"
-      - "443:443/udp"  # HTTP/3
+      - "80:80"
+      - "${MCP_HTTPS_PORT:-500}:${MCP_HTTPS_PORT:-500}"
+      - "${MCP_HTTPS_PORT:-500}:${MCP_HTTPS_PORT:-500}/udp"  # HTTP/3
     environment:
       MCP_DOMAIN: ${MCP_DOMAIN:?define MCP_DOMAIN en .env}
-      ACME_EMAIL: ${ACME_EMAIL:-}
+      HTTPS_PORT: ${MCP_HTTPS_PORT:-500}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data      # <- aquí viven los certificados: NO borrar
