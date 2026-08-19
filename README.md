@@ -330,99 +330,56 @@ npx localtunnel --port 3333       # or: ngrok http 3333, or cloudflared tunnel
 
 ### B. Deploy with Docker on a VPS
 
-`docker-compose.yml` runs two containers: the MCP server on port 4000 (not published to the
+`docker-compose.yml` runs two containers: the MCP server on port 4000 (never published to the
 internet) and **Caddy**, which terminates TLS in front of it and renews the certificate
 automatically.
 
-This VPS already has other services on ports 80 and 443, so:
+**Certificates are issued via the DNS-01 challenge, not HTTP-01.** That is the key design
+decision, and it exists for a reason: on this VPS ports 80 and 443 belong to an unrelated
+stack that must not be modified. HTTP-01 always validates against port 80 and TLS-ALPN
+against 443 — both fixed by RFC 8555 — so neither is available. DNS-01 proves domain control
+with a TXT record instead and needs **no inbound port at all**, which is what makes the two
+stacks able to coexist untouched.
 
-| | Port | Why |
-|---|---|---|
-| HTTPS / MCP endpoint | **500** | 443 is taken |
-| ACME HTTP-01 challenge | **90** | 80 is taken |
-| MCP server | 4000 | internal only, never published |
+That requires a DNS provider with an API. [DuckDNS](https://duckdns.org) is free and
+supported; `sslip.io` is not an option here because it has no API to write records to.
 
-**The catch:** Let's Encrypt always connects to **port 80** for HTTP-01 — that is fixed by
-RFC 8555 and cannot be configured — and TLS-ALPN is likewise fixed to 443. Caddy can *listen*
-on 90, but something has to get the request there. So whatever already owns port 80 must
-forward the challenge path to Caddy.
+**1. Create the hostname.** Log in at duckdns.org, add a subdomain (e.g. `visual-mcp-dan`)
+and point it at the VPS IP. Copy the account token shown at the top of the page.
 
-**1. Pick a public hostname.** ChatGPT requires HTTPS, and a bare IP cannot have a
-certificate. Without a domain of your own, use [sslip.io](https://sslip.io) — it resolves
-`<ip>.sslip.io` to that IP with no registration, and Let's Encrypt issues certificates for it:
-
-```bash
-curl -4 ifconfig.me            # on the VPS -> e.g. 203.0.113.45
-# hostname becomes: 203.0.113.45.sslip.io
-```
-
-**2. Forward the ACME challenge from the port-80 server.** Identify it first:
-
-```bash
-sudo ss -lptn 'sport = :80'
-```
-
-nginx — inside the `server { listen 80; }` block:
-
-```nginx
-location /.well-known/acme-challenge/ {
-    proxy_pass http://127.0.0.1:90;
-    proxy_set_header Host $host;
-}
-```
-
-Apache — inside the `<VirtualHost *:80>`:
-
-```apache
-ProxyPreserveHost On
-ProxyPass        /.well-known/acme-challenge/ http://127.0.0.1:90/.well-known/acme-challenge/
-ProxyPassReverse /.well-known/acme-challenge/ http://127.0.0.1:90/.well-known/acme-challenge/
-```
-
-Caddy — inside the site block serving port 80:
-
-```
-handle /.well-known/acme-challenge/* {
-    reverse_proxy 127.0.0.1:90
-}
-```
-
-Use a real proxy, not a `301` redirect: Let's Encrypt follows redirects only to ports 80 and
-443, so a redirect to `:90` would fail.
-
-**3. Configure and start:**
+**2. Configure:**
 
 ```bash
 cp .env.example .env
-# MCP_DOMAIN=203.0.113.45.sslip.io
-docker compose up -d --build
+# MCP_DOMAIN=visual-mcp-dan.duckdns.org
+# DUCKDNS_TOKEN=<the token>
 ```
 
-If the port-80 server runs inside its own container rather than on the host, `127.0.0.1:90`
-is not reachable from it — set `MCP_HTTP_BIND=0.0.0.0` in `.env` and point the proxy at the
-VPS's internal IP (or put both containers on one Docker network).
-
-**4. Verify** (the first request may take a few seconds while the certificate is issued):
+**3. Open port 500/tcp** — the only port this deployment needs, in both the VPS firewall and
+the provider's security list:
 
 ```bash
-curl https://$MCP_DOMAIN:500/health       # {"status":"ok",...}
-docker compose logs caddy | grep -i "certificate obtained"
+sudo ufw allow 500/tcp
+```
+
+**4. Build and start.** The Caddy image is built locally from `caddy/Dockerfile`, because the
+official image ships no DNS providers and `dns duckdns` would not exist without the module:
+
+```bash
+docker compose up -d --build
+docker compose logs -f caddy | grep -iE "certificate obtained|error"
+curl https://$MCP_DOMAIN:500/health
 ```
 
 The MCP URL is then `https://<MCP_DOMAIN>:500/mcp`, and it is permanent: `restart:
-unless-stopped` survives reboots, and the certificates live in the `caddy_data` volume, so
+unless-stopped` survives reboots, and certificates live in the `caddy_data` volume, so
 renewals persist across `docker compose down`/`up`. Only `docker compose down -v` wipes them.
-Keep the challenge forwarding in place — renewals every ~60 days need it exactly as much as
-the first issuance did.
+Renewals need the DuckDNS token to stay valid — nothing else.
 
 `PUBLIC_URL` and `ALLOWED_HOSTS` are derived from `MCP_DOMAIN` and `MCP_HTTPS_PORT` by
 Compose. Both must carry the port: `PUBLIC_URL` because `svgUrl` links would otherwise point
 at 443, and `ALLOWED_HOSTS` because the SDK compares the raw `Host` header — which reads
 `<domain>:500` on a non-standard port — as an exact string.
-
-**If you cannot touch the port-80 server**, HTTP-01 is not available at all. The options are
-a DNS-01 challenge (needs a real domain on a supported DNS provider — sslip.io has no API),
-or a Cloudflare Tunnel, which needs no inbound ports whatsoever.
 
 ### Without Compose
 

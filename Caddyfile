@@ -1,27 +1,25 @@
-# TLS automático (Let's Encrypt) para el host de MCP_DOMAIN.
+# TLS automático (Let's Encrypt) validando por DNS-01 contra DuckDNS.
 #
-# HTTPS se sirve en HTTPS_PORT (500) porque el 443 de este VPS ya está ocupado.
-# El desafío TLS-ALPN solo funciona en el 443, así que se desactiva y se valida
-# por HTTP-01.
+# Se usa DNS-01 y no HTTP-01 porque los puertos 80 y 443 de este VPS
+# pertenecen a otro stack (ucb-sports-hub-nginx) que no se debe modificar.
+# DNS-01 no necesita NINGÚN puerto entrante: Caddy crea un registro TXT en
+# _acme-challenge.<subdominio>.duckdns.org vía la API de DuckDNS.
 #
-# HTTP_PORT (90) es donde Caddy escucha el desafío, porque el 80 también está
-# ocupado. OJO: Let's Encrypt SIEMPRE se conecta al puerto 80 - eso no es
-# configurable. Para que esto funcione, el servidor que ocupa el 80 debe
-# reenviar /.well-known/acme-challenge/* a este puerto 90. Ver README.
+# Requiere la imagen de ./caddy (Caddy compilado con el módulo duckdns).
+
 {
-	http_port {$HTTP_PORT:90}
 	https_port {$HTTPS_PORT:500}
 
-	# El puerto 90 sirve EXCLUSIVAMENTE el desafío ACME: sin esto Caddy
-	# redirigiría a https://dominio/ (puerto 443), que es de otro servicio.
+	# No hay puerto 80 disponible para redirigir, y no hace falta ninguno.
 	auto_https disable_redirects
 }
 
 {$MCP_DOMAIN}:{$HTTPS_PORT:500} {
 	tls {
-		issuer acme {
-			disable_tlsalpn_challenge
-		}
+		dns duckdns {$DUCKDNS_TOKEN}
+		# Resolvers públicos: evita que un DNS local con caché o vista
+		# partida haga fallar la comprobación del TXT.
+		resolvers 1.1.1.1 8.8.8.8
 	}
 
 	encode zstd gzip
